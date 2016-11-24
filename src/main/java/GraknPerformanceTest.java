@@ -32,10 +32,11 @@ import static ai.grakn.graql.Graql.*;
  */
 public class GraknPerformanceTest {
 
-    final int numberOfThreads = 12; // size of the thread pool for concurrent queries
-    final int rateOfQuery = 10; // the number of milliseconds between executing queries
-    final int runTime = 10000; // the total number of milliseconds to run the test
+    int numberOfThreads = 4; // size of the thread pool for concurrent queries
+    int rateOfQuery = 1000; // the number of milliseconds between executing queries
+    int runTime = 5000; // the total number of milliseconds to run the test
     final int defaultResultLimit = 100; // a default number of results for long queries
+    final int updatePeriod = 60000;
     final String filepathPersonId = "/tmp/matchGetInstance.csv";
     final String filepathRelationId = "/tmp/matchGetRelation.csv";
     final AtomicLong totalTime = new AtomicLong(0L);
@@ -49,11 +50,20 @@ public class GraknPerformanceTest {
         LOGGER.setLevel(Level.DEBUG);
     }
 
+    GraknPerformanceTest(int numberOfThreads, int rateOfQuery, int runTime, boolean debug) {
+        this();
+        this.numberOfThreads = numberOfThreads;
+        this.rateOfQuery = rateOfQuery;
+        this.runTime = runTime;
+        if (!debug) LOGGER.setLevel(Level.OFF);
+    }
+
     public void queryLoadTesting() throws Exception {
         final GraknGraph graph = Grakn.factory(Grakn.DEFAULT_URI, "grakn").getGraph();
         final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(numberOfThreads);
         final FileReader personIdReader = new FileReader(filepathPersonId);
         final FileReader relationIdReader = new FileReader(filepathRelationId);
+        int totalNumberQueries = numberOfThreads * runTime / rateOfQuery;
 
         // save ids in memory
         List<CSVRecord> personIdsList = CSVFormat.DEFAULT.parse(personIdReader).getRecords();
@@ -65,10 +75,8 @@ public class GraknPerformanceTest {
 
         // load the queries into a queue randomly selecting between query type
         final Queue<Pattern> queries = new ConcurrentLinkedQueue<>();
-        int totalNumberQueries = numberOfThreads * runTime / rateOfQuery;
         for (int i = 0; i < totalNumberQueries; i++) {
-//            int picker = new Random().nextInt(5);
-            int picker = 4;
+            int picker = new Random().nextInt(5);
             String personId = null;
             CSVRecord relationId = null;
             switch (picker) {
@@ -123,6 +131,12 @@ public class GraknPerformanceTest {
                     () -> executeQuery(graph, queries), rateOfQuery, rateOfQuery, TimeUnit.MILLISECONDS));
         }
 
+        // schedule some updates
+        scheduler.scheduleAtFixedRate(() -> {
+            System.out.println("Progress is " + String.valueOf(queryNumber.get()) + " queries completed.");
+            System.out.flush();
+        }, updatePeriod, updatePeriod, TimeUnit.MILLISECONDS);
+
         // schedule the jobs to be terminated
         scheduler.schedule(() -> {
             for (ScheduledFuture handle : handles) {
@@ -130,12 +144,19 @@ public class GraknPerformanceTest {
             }
         }, runTime, TimeUnit.MILLISECONDS);
 
+        System.out.println("Started Querying");
         Thread.sleep(runTime);
+        System.out.println("Runtime Over");
 
         scheduler.shutdown();
-        scheduler.awaitTermination(rateOfQuery, TimeUnit.MILLISECONDS);
+        boolean completed = scheduler.awaitTermination(1000, TimeUnit.MILLISECONDS);
+        while (!completed) {
+            completed = scheduler.awaitTermination(1000, TimeUnit.MILLISECONDS);
+            LOGGER.debug("Waiting to finish queries.");
+        }
 
-        System.out.println("The total number of queries executed is: " + String.valueOf(queryNumber.get()));
+        System.out.println("The total number of queries attempted is: " + String.valueOf(totalNumberQueries));
+        System.out.println("The total number of queries completed is: " + String.valueOf(queryNumber.get()));
         System.out.println("The average query execution time is: " + String.valueOf((double) totalTime.get() / (double) queryNumber.get()) + " ms");
         System.out.println("The rate of query execution is: " + String.valueOf((double) queryNumber.get() / (double) runTime * 1000.0) + " s^-1");
         System.out.println("The run time for this test is: " + String.valueOf(runTime / 1000) + " s");
@@ -145,9 +166,11 @@ public class GraknPerformanceTest {
 
     private void executeQuery(GraknGraph graph, Queue<Pattern> queries) {
         Long startTime = System.currentTimeMillis();
+        LOGGER.debug("Start query at: " + startTime);
         List<Map<String, Concept>> result = graph.graql().match(queries.poll()).limit(defaultResultLimit).execute();
-        LOGGER.debug(String.valueOf(result));
+        LOGGER.debug(String.valueOf("Got result of size: " + result.size()));
         Long runTime = System.currentTimeMillis() - startTime;
+        LOGGER.debug("Ended query after: " + runTime);
         totalTime.getAndAdd(runTime);
         queryNumber.getAndIncrement();
     }
