@@ -123,6 +123,8 @@ public class GraknPerformanceTest {
         // get rid of the rest
         personIdsList.clear();
         relationIdsList.clear();
+        personIdReader.close();
+        relationIdReader.close();
 
         // set up the scheduled query executors
         Set<ScheduledFuture<?>> handles = new HashSet<>();
