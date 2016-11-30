@@ -19,6 +19,7 @@ import java.util.Queue;
 import java.util.Random;
 import java.util.Set;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -35,8 +36,10 @@ public class GraknPerformanceTest {
     int numberOfThreads = 4; // size of the thread pool for concurrent queries
     int rateOfQuery = 1000; // the number of milliseconds between executing queries
     int runTime = 5000; // the total number of milliseconds to run the test
+    int totalNumberQueries;
+    long startTime;
     final int defaultResultLimit = 100; // a default number of results for long queries
-    final int updatePeriod = 60000;
+    final int updatePeriod = 60000; // frequency of updates on progress
     final String filepathPersonId = "/tmp/matchGetInstance.csv";
     final String filepathRelationId = "/tmp/matchGetRelation.csv";
     final AtomicLong totalTime = new AtomicLong(0L);
@@ -55,15 +58,16 @@ public class GraknPerformanceTest {
         this.numberOfThreads = numberOfThreads;
         this.rateOfQuery = rateOfQuery;
         this.runTime = runTime;
-        if (!debug) LOGGER.setLevel(Level.OFF);
+        if (!debug) LOGGER.setLevel(Level.INFO);
     }
 
     public void queryLoadTesting() throws Exception {
         final GraknGraph graph = Grakn.factory(Grakn.DEFAULT_URI, "grakn").getGraph();
         final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(numberOfThreads);
+        final ExecutorService executor = Executors.newFixedThreadPool(numberOfThreads);
         final FileReader personIdReader = new FileReader(filepathPersonId);
         final FileReader relationIdReader = new FileReader(filepathRelationId);
-        int totalNumberQueries = numberOfThreads * runTime / rateOfQuery;
+        totalNumberQueries = numberOfThreads * runTime / rateOfQuery;
 
         // save ids in memory
         List<CSVRecord> personIdsList = CSVFormat.DEFAULT.parse(personIdReader).getRecords();
@@ -130,14 +134,8 @@ public class GraknPerformanceTest {
         Set<ScheduledFuture<?>> handles = new HashSet<>();
         for (int i = 0; i < numberOfThreads; i++) {
             handles.add(scheduler.scheduleAtFixedRate(
-                    () -> executeQuery(graph, queries), rateOfQuery, rateOfQuery, TimeUnit.MILLISECONDS));
+                    () -> executeQueryFromQueue(graph, queries), rateOfQuery, rateOfQuery, TimeUnit.MILLISECONDS));
         }
-
-        // schedule some updates
-        scheduler.scheduleAtFixedRate(() -> {
-            System.out.println("Progress is " + String.valueOf(queryNumber.get()) + " queries completed.");
-            System.out.flush();
-        }, updatePeriod, updatePeriod, TimeUnit.MILLISECONDS);
 
         // schedule the jobs to be terminated
         scheduler.schedule(() -> {
@@ -146,9 +144,20 @@ public class GraknPerformanceTest {
             }
         }, runTime, TimeUnit.MILLISECONDS);
 
-        System.out.println("Started Querying");
+        // schedule an update of the statistics
+        scheduler.scheduleAtFixedRate(() -> {
+            logCurrentPerformance();
+        }, updatePeriod, updatePeriod, TimeUnit.MILLISECONDS);
+
+//        executor.submit(() -> continuousExecuteQuery(graph, queries, executor));
+
+        LOGGER.info("Started Querying");
+        startTime = System.currentTimeMillis();
         Thread.sleep(runTime);
-        System.out.println("Runtime Over");
+        LOGGER.info("Runtime Over");
+
+//        executor.shutdown();
+//        executor.awaitTermination(1000, TimeUnit.MILLISECONDS);
 
         scheduler.shutdown();
         boolean completed = scheduler.awaitTermination(1000, TimeUnit.MILLISECONDS);
@@ -157,24 +166,34 @@ public class GraknPerformanceTest {
             LOGGER.debug("Waiting to finish queries.");
         }
 
-        System.out.println("The total number of queries attempted is: " + String.valueOf(totalNumberQueries));
-        System.out.println("The total number of queries completed is: " + String.valueOf(queryNumber.get()));
-        System.out.println("The average query execution time is: " + String.valueOf((double) totalTime.get() / (double) queryNumber.get()) + " ms");
-        System.out.println("The rate of query execution is: " + String.valueOf((double) queryNumber.get() / (double) runTime * 1000.0) + " s^-1");
-        System.out.println("The run time for this test is: " + String.valueOf(runTime / 1000) + " s");
+        logCurrentPerformance();
+        LOGGER.info("The run time for this test is: " + String.valueOf(runTime / 1000) + " s");
 
         ((AbstractGraknGraph) graph).getTinkerPopGraph().close();
     }
 
-    private void executeQuery(GraknGraph graph, Queue<Pattern> queries) {
+    private void executeSingleQuery(GraknGraph graph, Pattern query) {
         Long startTime = System.currentTimeMillis();
         LOGGER.debug("Start query at: " + startTime);
-        List<Map<String, Concept>> result = graph.graql().match(queries.poll()).limit(defaultResultLimit).execute();
+        List<Map<String, Concept>> result = graph.graql().match(query).limit(defaultResultLimit).execute();
         LOGGER.debug(String.valueOf("Got result of size: " + result.size()));
         Long runTime = System.currentTimeMillis() - startTime;
         LOGGER.debug("Ended query after: " + runTime);
         totalTime.getAndAdd(runTime);
         queryNumber.getAndIncrement();
+    }
+
+    private void executeQueryFromQueue(GraknGraph graph, Queue<Pattern> queries) {
+        executeSingleQuery(graph, queries.poll());
+    }
+
+    private void continuousExecuteQuery(GraknGraph graph, Queue<Pattern> queries, ExecutorService executor) {
+        Pattern currentQuery = queries.poll();
+        if (currentQuery!=null) {
+            executeSingleQuery(graph, currentQuery);
+        } else {
+            executor.shutdown();
+        }
     }
 
     private Pattern getEntityById(String varName, String id) {
@@ -206,6 +225,13 @@ public class GraknPerformanceTest {
     private Pattern getMessagesOfEntity(String varName, String id) {
         assert varName != "z";
         return and(getEntityById(varName, id), var("z").isa("message"), var().rel(varName).rel("z").isa("writes"));
+    }
+
+    private void logCurrentPerformance() {
+        LOGGER.info("The total number of queries attempted is: " + String.valueOf(totalNumberQueries));
+        LOGGER.info("The total number of queries completed is: " + String.valueOf(queryNumber.get()));
+        LOGGER.info("The average query execution time is: " + String.valueOf((double) totalTime.get() / (double) queryNumber.get()) + " ms");
+        LOGGER.info("The rate of query execution is: " + String.valueOf((double) queryNumber.get() / (double) (System.currentTimeMillis()-startTime) * 1000.0) + " s^-1");
     }
 
 }
