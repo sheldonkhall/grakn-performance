@@ -33,9 +33,9 @@ import static ai.grakn.graql.Graql.*;
  */
 public class GraknPerformanceTest {
 
-    int numberOfThreads = 4; // size of the thread pool for concurrent queries
+    int numberOfThreads = 16; // size of the thread pool for concurrent queries
     int rateOfQuery = 1000; // the number of milliseconds between executing queries
-    int runTime = 5000; // the total number of milliseconds to run the test
+    int runTime = 3600000; // the total number of milliseconds to run the test
     int totalNumberQueries;
     long startTime;
     final int defaultResultLimit = 100; // a default number of results for long queries
