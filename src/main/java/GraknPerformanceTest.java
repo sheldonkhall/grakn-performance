@@ -1,9 +1,6 @@
 import ai.grakn.Grakn;
 import ai.grakn.GraknGraph;
 import ai.grakn.concept.Concept;
-import ai.grakn.graph.internal.AbstractGraknGraph;
-import ai.grakn.graql.Graql;
-import ai.grakn.graql.MatchQuery;
 import ai.grakn.graql.Pattern;
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
@@ -26,7 +23,8 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
-import static ai.grakn.graql.Graql.*;
+import static ai.grakn.graql.Graql.and;
+import static ai.grakn.graql.Graql.var;
 
 /**
  *
@@ -169,10 +167,11 @@ public class GraknPerformanceTest {
         logCurrentPerformance();
         LOGGER.info("The run time for this test is: " + String.valueOf(runTime / 1000) + " s");
 
-        ((AbstractGraknGraph) graph).getTinkerPopGraph().close();
+        graph.close();
     }
 
-    private void executeSingleQuery(GraknGraph graph, Pattern query) {
+    private void executeSingleQuery(Pattern query) {
+        GraknGraph graph = Grakn.factory(Grakn.DEFAULT_URI, "grakn").getGraph();
         Long startTime = System.currentTimeMillis();
         LOGGER.debug("Start query at: " + startTime);
         List<Map<String, Concept>> result = graph.graql().match(query).limit(defaultResultLimit).execute();
@@ -181,16 +180,17 @@ public class GraknPerformanceTest {
         LOGGER.debug("Ended query after: " + runTime);
         totalTime.getAndAdd(runTime);
         queryNumber.getAndIncrement();
+        graph.close();
     }
 
     private void executeQueryFromQueue(GraknGraph graph, Queue<Pattern> queries) {
-        executeSingleQuery(graph, queries.poll());
+        executeSingleQuery(queries.poll());
     }
 
     private void continuousExecuteQuery(GraknGraph graph, Queue<Pattern> queries, ExecutorService executor) {
         Pattern currentQuery = queries.poll();
         if (currentQuery!=null) {
-            executeSingleQuery(graph, currentQuery);
+            executeSingleQuery(currentQuery);
         } else {
             executor.shutdown();
         }
