@@ -49,12 +49,12 @@
         <dependency>
             <groupId>ai.grakn</groupId>
             <artifactId>grakn-graql</artifactId>
-            <version>0.6.0</version>
+            <version>0.8.0-SNAPSHOT</version>
         </dependency>
         <dependency>
             <groupId>ai.grakn</groupId>
             <artifactId>grakn-titan-factory</artifactId>
-            <version>0.6.0</version>
+            <version>0.8.0-SNAPSHOT</version>
             <exclusions>
                 <exclusion>
                     <groupId>org.slf4j</groupId>
